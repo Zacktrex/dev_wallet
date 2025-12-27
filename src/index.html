@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dev Wallet - ESP32-C3</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            padding: 40px;
+            max-width: 600px;
+            width: 100%;
+        }
+        
+        h1 {
+            color: #667eea;
+            margin-bottom: 10px;
+            font-size: 2.5em;
+            text-align: center;
+        }
+        
+        .subtitle {
+            color: #666;
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 1.1em;
+        }
+        
+        .status {
+            background: #f0f0f0;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        
+        .status-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid #ddd;
+        }
+        
+        .status-item:last-child {
+            border-bottom: none;
+        }
+        
+        .status-label {
+            font-weight: bold;
+            color: #333;
+        }
+        
+        .status-value {
+            color: #667eea;
+        }
+        
+        .info-box {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 10px;
+            padding: 20px;
+            margin-top: 20px;
+        }
+        
+        .info-box h2 {
+            margin-bottom: 10px;
+        }
+        
+        .info-box ul {
+            list-style: none;
+            padding-left: 0;
+        }
+        
+        .info-box li {
+            padding: 5px 0;
+            padding-left: 20px;
+            position: relative;
+        }
+        
+        .info-box li:before {
+            content: "✓";
+            position: absolute;
+            left: 0;
+            color: #4ade80;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 Dev Wallet</h1>
+        <p class="subtitle">ESP32-C3 Web Server</p>
+        
+        <div class="status">
+            <div class="status-item">
+                <span class="status-label">Wi-Fi AP Status:</span>
+                <span class="status-value">Running</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">SSID:</span>
+                <span class="status-value">DevWallet</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">IP Address:</span>
+                <span class="status-value">192.168.4.1</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">Connection:</span>
+                <span class="status-value">Active</span>
+            </div>
+        </div>
+        
+        <div class="info-box">
+            <h2>Device Information</h2>
+            <ul>
+                <li>Wi-Fi Access Point Mode</li>
+                <li>BLE Support Enabled</li>
+                <li>Web Server Running</li>
+                <li>Network Stack Active</li>
+            </ul>
+        </div>
+    </div>
+</body>
+</html>
+

@@ -9,52 +9,30 @@
 
 use bt_hci::controller::ExternalController;
 use embassy_executor::Spawner;
-use embassy_net::{Ipv4Cidr, Runner, Stack, StackResources, StaticConfigV4};
-use embassy_time::{Duration, Timer};
+use embassy_time::Timer;
 use esp_hal::clock::CpuClock;
-use esp_hal::rng::Rng;
 use esp_hal::timer::timg::TimerGroup;
 use esp_radio::ble::controller::BleConnector;
-use esp_radio::wifi::{AccessPointConfig, ModeConfig, WifiDevice};
 use log::info;
 use trouble_host::prelude::*;
-use core::net::Ipv4Addr;
-use core::str::FromStr;
-use picoserve::{response::File, routing::get_service, AppBuilder, Router};
-use picoserve::routing::PathRouter;
+use dev_wallet::{config, network, wifi, web};
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
     loop {}
 }
 
-extern crate alloc;
-
-const CONNECTIONS_MAX: usize = 1;
-const L2CAP_CHANNELS_MAX: usize = 1;
-
-// Wi-Fi Access Point configuration
-const SSID: &str = env!("SSID");
-const PASSWORD: &str = env!("PASSWORD");
-// IP configuration for the AP
-const STATIC_IP: &str = "192.168.4.1/24";
-const GATEWAY_IP: &str = "192.168.4.1";
-
 // This creates a default app-descriptor required by the esp-idf bootloader.
-// For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
 esp_bootloader_esp_idf::esp_app_desc!();
 
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
-    // generator version: 1.0.1
-
     esp_println::logger::init_logger_from_env();
 
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
 
     esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 66320);
-    // COEX needs more RAM - so we've added some more
     esp_alloc::heap_allocator!(size: 64 * 1024);
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
@@ -64,7 +42,7 @@ async fn main(spawner: Spawner) -> ! {
 
     info!("Embassy initialized!");
 
-    // Make radio_init static so it lives long enough for both Wi-Fi and BLE
+    // Initialize radio for Wi-Fi and BLE
     use static_cell::StaticCell;
     static RADIO_INIT: StaticCell<esp_radio::Controller<'static>> = StaticCell::new();
     let radio_init = RADIO_INIT.init(esp_radio::init().expect("Failed to initialize Wi-Fi/BLE controller"));
@@ -74,325 +52,44 @@ async fn main(spawner: Spawner) -> ! {
         esp_radio::wifi::new(radio_init, peripherals.WIFI, Default::default())
             .expect("Failed to initialize Wi-Fi controller");
     
-    info!("Configuring Wi-Fi Access Point...");
-    info!("SSID: {}", SSID);
-    info!("SSID Broadcasting: enabled (not hidden)");
+    wifi_controller = wifi::setup_access_point(wifi_controller).await;
     
-    let ap_config = ModeConfig::AccessPoint(
-        AccessPointConfig::default()
-            .with_ssid(SSID.into())
-            .with_password(PASSWORD.into())
-            .with_auth_method(esp_radio::wifi::AuthMethod::Wpa2Personal)
-            .with_ssid_hidden(false), // Enable SSID broadcasting
-    );
-    
-    wifi_controller.set_config(&ap_config).unwrap();
-    info!("Starting Wi-Fi Access Point...");
-    wifi_controller.start_async().await.unwrap();
-    info!("Wi-Fi Access Point started successfully!");
-    
-    // Initialize network stack for the AP
+    // Initialize network stack
     let wifi_interface = interfaces.ap;
-    let rng = Rng::new();
-    let net_seed = rng.random() as u64 | ((rng.random() as u64) << 32);
+    let (stack, runner) = network::setup_network_stack(wifi_interface);
     
-    let Ok(ip_addr) = Ipv4Cidr::from_str(STATIC_IP) else {
-        info!("Invalid STATIC_IP: {}", STATIC_IP);
-        loop {}
-    };
-    
-    let Ok(gateway) = Ipv4Addr::from_str(GATEWAY_IP) else {
-        info!("Invalid GATEWAY_IP: {}", GATEWAY_IP);
-        loop {}
-    };
-    
-    let net_config = embassy_net::Config::ipv4_static(StaticConfigV4 {
-        address: ip_addr,
-        gateway: Some(gateway),
-        dns_servers: Default::default(),
-    });
-    
-    // Create network stack with more resources for better connection handling
-    static STACK_RESOURCES: StaticCell<StackResources<4>> = StaticCell::new();
-    let stack_resources = STACK_RESOURCES.init(StackResources::<4>::new());
-    
-    let (stack, runner) = embassy_net::new(
-        wifi_interface,
-        net_config,
-        stack_resources,
-        net_seed,
-    );
-    
-    info!("Network stack initialized");
-    info!("AP IP Address: {}", ip_addr);
-    info!("AP Gateway: {}", gateway);
-    
-    // Spawn network stack runner task (required for network to work)
-    spawner.spawn(net_task(runner)).ok();
+    // Spawn network stack runner task
+    spawner.spawn(network::net_task(runner)).ok();
     info!("Network stack task spawned");
     
-    // Wait for network link to be up
-    info!("Waiting for network link...");
-    loop {
-        if stack.is_link_up() {
-            info!("Network link is UP");
-            break;
-        }
-        Timer::after(Duration::from_millis(500)).await;
-    }
-    
-    // Wait for IP configuration
-    info!("Waiting for IP configuration...");
-    loop {
-        if let Some(config) = stack.config_v4() {
-            info!("Network configured! IP: {}", config.address);
-            break;
-        }
-        Timer::after(Duration::from_millis(500)).await;
-    }
+    // Wait for network to be ready
+    network::wait_for_network_link(&stack).await;
+    network::wait_for_ip_config(&stack).await;
     
     info!("AP is now advertising and ready for connections");
     info!("ESP32's built-in DHCP server should assign IPs to clients");
     info!("Clients should get IPs in range: 192.168.4.2 - 192.168.4.254");
-    
     info!("AP is ready - devices can now connect");
     
     // Set up web server
     info!("Setting up web server...");
-    let router = make_static_router();
-    let config = make_static_config();
+    let router = web::make_static_router();
+    let web_config = web::make_static_config();
     
-    // Spawn web server task (stack is moved into the task)
-    spawner.spawn(web_server_task(0, stack, router, config)).ok();
+    spawner.spawn(web::web_server_task(0, stack, router, web_config)).ok();
     info!("Web server started on http://192.168.4.1");
     
     // Spawn task to monitor Wi-Fi AP
-    spawner.spawn(wifi_monitor_task(wifi_controller)).ok();
+    spawner.spawn(wifi::wifi_monitor_task(wifi_controller)).ok();
     
-    // find more examples https://github.com/embassy-rs/trouble/tree/main/examples/esp32
+    // Initialize BLE stack
     let transport = BleConnector::new(radio_init, peripherals.BT, Default::default()).unwrap();
     let ble_controller = ExternalController::<_, 20>::new(transport);
-    let mut resources: HostResources<DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX> =
+    let mut resources: HostResources<DefaultPacketPool, { config::CONNECTIONS_MAX }, { config::L2CAP_CHANNELS_MAX }> =
         HostResources::new();
     let _stack = trouble_host::new(ble_controller, &mut resources);
 
     loop {
-        Timer::after(Duration::from_secs(1)).await;
-    }
-
-    // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v1.0.0/examples/src/bin
-}
-
-#[embassy_executor::task]
-async fn net_task(mut runner: Runner<'static, WifiDevice<'static>>) {
-    info!("Network stack task started");
-    runner.run().await
-}
-
-struct WebApp;
-
-// Custom service that logs query parameters from form submissions
-struct LoggingSubmitService;
-
-impl<State, PathParameters> picoserve::routing::RequestHandlerService<State, PathParameters> for LoggingSubmitService {
-    async fn call_request_handler_service<R: picoserve::io::Read, W: picoserve::response::ResponseWriter<Error = R::Error>>(
-        &self,
-        _state: &State,
-        _path_parameters: PathParameters,
-        request: picoserve::request::Request<'_, R>,
-        response_writer: W,
-    ) -> Result<picoserve::ResponseSent, W::Error> {
-        // Get the request path and query string
-        // Extract message from query string (format: /submit?message=value)
-        if let Some(query) = request.parts.query() {
-            // UrlEncodedString is a tuple struct, access the underlying &str with .0
-            let query_str = query.0;
-            
-            if let Some(msg_start) = query_str.find("message=") {
-                let value_start = msg_start + 8; // "message=".len()
-                let value = &query_str[value_start..];
-
-                // URL decode: replace + with space and %20 with space
-                let mut decoded = alloc::string::String::new();
-                let mut chars = value.chars();
-                while let Some(ch) = chars.next() {
-                    match ch {
-                        '+' => decoded.push(' '),
-                        '%' => {
-                            // Simple URL decode for %20
-                            if let (Some('2'), Some('0')) = (chars.next(), chars.next()) {
-                                decoded.push(' ');
-                            } else {
-                                decoded.push(ch);
-                            }
-                        }
-                        '&' => break, // Stop at next parameter
-                        _ => decoded.push(ch),
-                    }
-                }
-
-                // Log to console - THIS WILL PRINT IN DEBUG TERMINAL
-                info!("📨 Received message from web form: {}", decoded.trim());
-            }
-        }
-
-        // Return the HTML page with proper Content-Type header
-        let html_content = include_str!("../index.html");
-        let response = picoserve::response::Response::new(
-            picoserve::response::status::StatusCode::OK,
-            html_content,
-        )
-        .with_header("Content-Type", "text/html; charset=utf-8");
-        // Convert RequestBodyConnection to Connection using finalize()
-        let connection = request.body_connection.finalize().await?;
-        response_writer.write_response(connection, response).await
+        Timer::after(embassy_time::Duration::from_secs(1)).await;
     }
 }
-
-impl AppBuilder for WebApp {
-    type PathRouter = impl PathRouter;
-
-    fn build_app(self) -> Router<Self::PathRouter> {
-        Router::new()
-            .route(
-                "/",
-                get_service(File::html(include_str!("../index.html"))),
-            )
-            .route(
-                "/submit",
-                get_service(LoggingSubmitService),
-            )
-    }
-}
-
-fn make_static_router() -> &'static picoserve::AppRouter<WebApp> {
-    use static_cell::StaticCell;
-    static ROUTER: StaticCell<picoserve::AppRouter<WebApp>> = StaticCell::new();
-    ROUTER.init(WebApp.build_app())
-}
-
-fn make_static_config() -> &'static picoserve::Config<Duration> {
-    use static_cell::StaticCell;
-    static CONFIG: StaticCell<picoserve::Config<Duration>> = StaticCell::new();
-    CONFIG.init(picoserve::Config::new(picoserve::Timeouts {
-        start_read_request: Some(Duration::from_secs(5)),
-        read_request: Some(Duration::from_secs(1)),
-        write: Some(Duration::from_secs(1)),
-        persistent_start_read_request: Some(Duration::from_secs(1)),
-    })
-    .keep_connection_alive())
-}
-
-#[embassy_executor::task]
-async fn web_server_task(
-    task_id: usize,
-    stack: Stack<'static>,
-    router: &'static picoserve::AppRouter<WebApp>,
-    config: &'static picoserve::Config<Duration>,
-) -> ! {
-    let port = 80;
-    let mut tcp_rx_buffer = [0; 1024];
-    let mut tcp_tx_buffer = [0; 1024];
-    let mut http_buffer = [0; 2048];
-
-    info!("Web server task {} starting on port {}", task_id, port);
-    info!("Web server ready to accept connections on http://192.168.4.1");
-    
-    // Monitor for device connections by checking link state
-    let mut last_link_state = stack.is_link_up();
-    let mut connection_logged = false;
-    
-    if last_link_state {
-        info!("Network link is up - device may already be connected");
-        info!("🔌 Device connected to Wi-Fi AP!");
-        connection_logged = true;
-    } else {
-        info!("Waiting for device to connect...");
-    }
-    
-    // Monitor link state changes to detect connections before starting server
-    // After server starts, connection detection continues via network activity
-    loop {
-        let current_link_state = stack.is_link_up();
-        
-        if current_link_state != last_link_state {
-            if current_link_state && !connection_logged {
-                info!("🔌 Device connected to Wi-Fi AP!");
-                
-                // Wait a moment for IP assignment
-                Timer::after(Duration::from_millis(2000)).await;
-                
-                if let Some(net_config) = stack.config_v4() {
-                    info!("Network configured. AP IP: {}", net_config.address);
-                }
-                info!("Connected device can now access the web server at http://192.168.4.1");
-                connection_logged = true;
-            } else if !current_link_state && connection_logged {
-                info!("🔌 Device disconnected from Wi-Fi AP");
-                connection_logged = false;
-            }
-            last_link_state = current_link_state;
-        }
-        
-        // Start server once link is up (or immediately if already up)
-        if current_link_state {
-            break;
-        }
-        
-        Timer::after(Duration::from_millis(500)).await;
-    }
-    
-    info!("Starting web server - ready to serve requests");
-    picoserve::Server::new(router, config, &mut http_buffer)
-        .listen_and_serve(task_id, stack, port, &mut tcp_rx_buffer, &mut tcp_tx_buffer)
-        .await
-        .into_never()
-}
-
-#[embassy_executor::task]
-async fn wifi_monitor_task(mut controller: esp_radio::wifi::WifiController<'static>) {
-    use esp_radio::wifi::{WifiApState, WifiEvent};
-    
-    info!("Wi-Fi monitor task started");
-    
-    loop {
-        match esp_radio::wifi::ap_state() {
-            WifiApState::Started => {
-                info!("Wi-Fi AP is running and advertising");
-                // Wait for stop event
-                controller.wait_for_event(WifiEvent::ApStop).await;
-                info!("Wi-Fi AP stopped - will restart");
-                Timer::after(Duration::from_millis(5000)).await;
-                
-                // Restart AP
-                let ap_config = ModeConfig::AccessPoint(
-                    AccessPointConfig::default()
-                        .with_ssid(SSID.into())
-                        .with_password(PASSWORD.into())
-                        .with_auth_method(esp_radio::wifi::AuthMethod::Wpa2Personal)
-                        .with_ssid_hidden(false),
-                );
-                controller.set_config(&ap_config).unwrap();
-                controller.start_async().await.unwrap();
-                info!("Wi-Fi AP restarted and advertising");
-            }
-            _ => {
-                if !matches!(controller.is_started(), Ok(true)) {
-                    info!("Wi-Fi AP not started, attempting to start...");
-                    let ap_config = ModeConfig::AccessPoint(
-                        AccessPointConfig::default()
-                            .with_ssid(SSID.into())
-                            .with_password(PASSWORD.into())
-                            .with_auth_method(esp_radio::wifi::AuthMethod::Wpa2Personal)
-                            .with_ssid_hidden(false),
-                    );
-                    controller.set_config(&ap_config).unwrap();
-                    controller.start_async().await.unwrap();
-                    info!("Wi-Fi AP started and advertising");
-                }
-                Timer::after(Duration::from_secs(5)).await;
-            }
-        }
-    }
-}
-

@@ -100,6 +100,77 @@
             left: 0;
             color: #4ade80;
         }
+        
+        .form-box {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 25px;
+            margin-top: 20px;
+        }
+        
+        .form-box h2 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 1.5em;
+        }
+        
+        .input-field {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 16px;
+            margin-bottom: 10px;
+            transition: border-color 0.3s;
+        }
+        
+        .input-field:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .submit-btn {
+            width: 100%;
+            padding: 12px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        .submit-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        
+        .submit-btn:active {
+            transform: translateY(0);
+        }
+        
+        .status-message {
+            margin-top: 15px;
+            padding: 10px;
+            border-radius: 5px;
+            text-align: center;
+            font-weight: bold;
+            display: none;
+        }
+        
+        .status-message.success {
+            background: #4ade80;
+            color: white;
+            display: block;
+        }
+        
+        .status-message.error {
+            background: #ef4444;
+            color: white;
+            display: block;
+        }
     </style>
 </head>
 <body>
@@ -135,7 +206,49 @@
                 <li>Network Stack Active</li>
             </ul>
         </div>
+        
+        <div class="form-box">
+            <h2>Send Message to Console</h2>
+            <form id="message-form" onsubmit="handleSubmit(event)">
+                <input 
+                    type="text" 
+                    id="message-input"
+                    name="message" 
+                    placeholder="Enter your message here..." 
+                    required
+                    class="input-field"
+                />
+                <button type="submit" class="submit-btn">Submit</button>
+            </form>
+            <div id="status-message" class="status-message"></div>
+        </div>
     </div>
+    <script>
+        function handleSubmit(event) {
+            event.preventDefault();
+            const input = document.getElementById('message-input');
+            const message = input.value;
+            const statusDiv = document.getElementById('status-message');
+            
+            // Show loading
+            statusDiv.className = 'status-message';
+            statusDiv.textContent = 'Sending...';
+            statusDiv.style.display = 'block';
+            
+            // Send to server via GET request (will be logged on server)
+            window.location.href = '/submit?message=' + encodeURIComponent(message);
+        }
+        
+        // Check if we have a message in URL and show it
+        const urlParams = new URLSearchParams(window.location.search);
+        const message = urlParams.get('message');
+        if (message) {
+            const statusDiv = document.getElementById('status-message');
+            statusDiv.className = 'status-message success';
+            statusDiv.textContent = 'Message sent: ' + decodeURIComponent(message);
+            statusDiv.style.display = 'block';
+        }
+    </script>
 </body>
 </html>
 

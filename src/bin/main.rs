@@ -21,6 +21,7 @@ use trouble_host::prelude::*;
 use core::net::Ipv4Addr;
 use core::str::FromStr;
 use picoserve::{response::File, routing::get_service, AppBuilder, Router};
+use picoserve::routing::PathRouter;
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
@@ -190,14 +191,77 @@ async fn net_task(mut runner: Runner<'static, WifiDevice<'static>>) {
 
 struct WebApp;
 
+// Custom service that logs query parameters from form submissions
+struct LoggingSubmitService;
+
+impl<State, PathParameters> picoserve::routing::RequestHandlerService<State, PathParameters> for LoggingSubmitService {
+    async fn call_request_handler_service<R: picoserve::io::Read, W: picoserve::response::ResponseWriter<Error = R::Error>>(
+        &self,
+        _state: &State,
+        _path_parameters: PathParameters,
+        request: picoserve::request::Request<'_, R>,
+        response_writer: W,
+    ) -> Result<picoserve::ResponseSent, W::Error> {
+        // Get the request path and query string
+        // Extract message from query string (format: /submit?message=value)
+        if let Some(query) = request.parts.query() {
+            // UrlEncodedString is a tuple struct, access the underlying &str with .0
+            let query_str = query.0;
+            
+            if let Some(msg_start) = query_str.find("message=") {
+                let value_start = msg_start + 8; // "message=".len()
+                let value = &query_str[value_start..];
+
+                // URL decode: replace + with space and %20 with space
+                let mut decoded = alloc::string::String::new();
+                let mut chars = value.chars();
+                while let Some(ch) = chars.next() {
+                    match ch {
+                        '+' => decoded.push(' '),
+                        '%' => {
+                            // Simple URL decode for %20
+                            if let (Some('2'), Some('0')) = (chars.next(), chars.next()) {
+                                decoded.push(' ');
+                            } else {
+                                decoded.push(ch);
+                            }
+                        }
+                        '&' => break, // Stop at next parameter
+                        _ => decoded.push(ch),
+                    }
+                }
+
+                // Log to console - THIS WILL PRINT IN DEBUG TERMINAL
+                info!("📨 Received message from web form: {}", decoded.trim());
+            }
+        }
+
+        // Return the HTML page
+        // Use the HTML content as a string response
+        let html_content = include_str!("../index.html");
+        let response = picoserve::response::Response::new(
+            picoserve::response::status::StatusCode::OK,
+            html_content,
+        );
+        // Convert RequestBodyConnection to Connection using finalize()
+        let connection = request.body_connection.finalize().await?;
+        response_writer.write_response(connection, response).await
+    }
+}
+
 impl AppBuilder for WebApp {
-    type PathRouter = impl picoserve::routing::PathRouter;
+    type PathRouter = impl PathRouter;
 
     fn build_app(self) -> Router<Self::PathRouter> {
-        Router::new().route(
-            "/",
-            get_service(File::html(include_str!("../index.html"))),
-        )
+        Router::new()
+            .route(
+                "/",
+                get_service(File::html(include_str!("../index.html"))),
+            )
+            .route(
+                "/submit",
+                get_service(LoggingSubmitService),
+            )
     }
 }
 

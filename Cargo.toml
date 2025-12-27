@@ -66,6 +66,14 @@ picoserve = { version = "0.17.1", features = ["embassy"] }
 critical-section = "1.2.0"
 static_cell      = "2.1.1"
 
+# Display support
+embassy-sync = "0.5.0"
+ssd1306 = { version = "0.10.0", features = ["async"] }
+embedded-graphics = "0.8.1"
+embedded-graphics-core = "0.4.0"
+embedded-hal-async = "1.0.0-rc.3"
+heapless = "0.8.0"
+
 
 [profile.dev]
 # Rust debug is too slow.

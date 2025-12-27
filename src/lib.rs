@@ -5,3 +5,4 @@ pub mod config;
 pub mod wifi;
 pub mod network;
 pub mod web;
+pub mod display;

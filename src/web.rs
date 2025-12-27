@@ -6,8 +6,36 @@ use log::info;
 use picoserve::{response::File, routing::get_service, AppBuilder, Router};
 use picoserve::routing::PathRouter;
 use crate::config::WEB_SERVER_PORT;
+use crate::display::DisplayMessageSender;
 
 extern crate alloc;
+
+/// Static storage for display sender (set by make_static_router_with_display)
+static DISPLAY_SENDER: static_cell::StaticCell<Option<DisplayMessageSender>> = static_cell::StaticCell::new();
+static mut DISPLAY_SENDER_REF: Option<&'static DisplayMessageSender> = None;
+
+/// Set the display sender (called by make_static_router_with_display)
+pub fn set_display_sender(sender: DisplayMessageSender) {
+    unsafe {
+        let sender_ref = DISPLAY_SENDER.init(Some(sender));
+        if let Some(s) = sender_ref.as_ref() {
+            DISPLAY_SENDER_REF = Some(s);
+        }
+    }
+}
+
+/// Send message to display via the channel
+fn send_to_display(message: &str) {
+    unsafe {
+        if let Some(sender) = DISPLAY_SENDER_REF {
+            use heapless::String;
+            let mut display_msg = String::<64>::new();
+            if display_msg.push_str(message).is_ok() {
+                let _ = sender.try_send(display_msg);
+            }
+        }
+    }
+}
 
 /// Custom service that logs query parameters from form submissions
 pub struct LoggingSubmitService;
@@ -49,7 +77,12 @@ impl<State, PathParameters> picoserve::routing::RequestHandlerService<State, Pat
                 }
 
                 // Log to console - THIS WILL PRINT IN DEBUG TERMINAL
-                info!("📨 Received message from web form: {}", decoded.trim());
+                let message = decoded.trim();
+                info!("📨 Received message from web form: {}", message);
+                
+                // Send message to display via the channel
+                // The sender is stored statically and accessed here
+                send_to_display(message);
             }
         }
 
@@ -85,6 +118,14 @@ impl AppBuilder for WebApp {
             )
     }
 }
+
+/// Create router with display sender
+/// The sender is stored and messages will be sent to the display task
+pub fn make_static_router_with_display(display_sender: DisplayMessageSender) -> &'static picoserve::AppRouter<WebApp> {
+    set_display_sender(display_sender);
+    make_static_router()
+}
+
 
 /// Create a static router instance
 pub fn make_static_router() -> &'static picoserve::AppRouter<WebApp> {

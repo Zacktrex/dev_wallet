@@ -2,7 +2,12 @@
 runner = "espflash flash --monitor --chip esp32c3"
 
 [env]
-ESP_LOG="info"
+ESP_LOG = "info"
+SSID = "DevWallet"
+PASSWORD = "password123"
+STATIC_IP = "1.1.1.1 "
+GATEWAY_IP = "1.1.1.1"
+HOST_IP = "1.1.1.1"
 
 [build]
 rustflags = [

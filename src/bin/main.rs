@@ -236,13 +236,13 @@ impl<State, PathParameters> picoserve::routing::RequestHandlerService<State, Pat
             }
         }
 
-        // Return the HTML page
-        // Use the HTML content as a string response
+        // Return the HTML page with proper Content-Type header
         let html_content = include_str!("../index.html");
         let response = picoserve::response::Response::new(
             picoserve::response::status::StatusCode::OK,
             html_content,
-        );
+        )
+        .with_header("Content-Type", "text/html; charset=utf-8");
         // Convert RequestBodyConnection to Connection using finalize()
         let connection = request.body_connection.finalize().await?;
         response_writer.write_response(connection, response).await
